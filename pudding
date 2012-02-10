@@ -1,0 +1,52 @@
+#!/usr/bin/perl
+
+## This is the main program. It uses netcat (nc) to listen on
+## a specified port. Upon receiving a connection, nc will execute
+## the PERL script stealth.pl (it actually builds a shell script
+## first and calls the shell script- its just for passing parameters).
+## Stealth.pl encodes the request according to the <mode> passed. For
+## encoding types - see the usage text. The request is sent to the 
+## receiving server and the response is send back (via STDOUT) to the nc
+## process, and thus back to the scanner/exploit.
+##
+## This scripts forks to cater for exploits or scanners that uses 
+## multiple connections. As PERL does not execute THAT fast, you
+## might have to run more than one process (in the background)
+## On my PentiumPro200 I normally do not need more than 3.
+##
+## UTF-8 encoding currently only works with IIS and Apache servers that
+## have UTF-8 enabled.
+##
+## 2001/01/11 Roelof Temmingh
+## roelof@sensepost.com http://www.sensepost.com
+
+####usage & init
+if ($#ARGV<0) {die "\nUsage: proxyloops listen_port:target_IP:target_port:mode\n
+IDS evasive methods:\n
+     # mode 0 clear (no encoding) for testing
+     # mode 1 all UPPERCASE
+     # mode 2 hex encoding
+     # mode 3 /./ directory insertion
+     # mode 4 fake parameter
+     # mode 5 premature URL ending
+     # mode 6 windows delimeter
+     # mode 7 random UTF8 encoding\n
+";}
+($listenport,$host,$port,$mode)=split(/:/,@ARGV[0]);
+$|=1; $vurk=0;
+
+### were are we?
+$path=`pwd`;
+chomp $path;
+### create the execute file to work with NC
+system "echo \\#\\!/bin/sh > foo.bat";
+system "echo $path/stealth $host:$port:$mode >> foo.bat";
+system "chmod +x foo.bat";
+
+### proxy loop
+while () {
+ $vurk=fork();
+ system "/usr/local/bin/nc -l -p $listenport -e foo.bat";
+ if ($vurk!=0){exit;}
+}
+#spidermark: sensepostdata pudding

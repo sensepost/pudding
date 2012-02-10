@@ -1,0 +1,146 @@
+#!/usr/bin/perl
+
+## This module gets an HTTP header from the pudding PERL
+## script (should be with the rest of the "distribution").
+## It gets the header from a netcat (nc) process.
+## The scripts looks at the HTTP header, and encodes the
+## request according to a mode setting. See pudding.pl 
+## for details. Mode 7 is UTF-8 encoding, the others were
+## butchered from RFP's whisker.pl scanner.
+##
+## This script is called from pudding - you dont want
+## to execute this script - run pudding
+## Please read the pudding.README.txt documentation.
+##
+## 2001/01/11 Roelof Temmingh
+## roelof@sensepost.com http://www.sensepost.com
+
+use Socket;
+
+######read the UTF-8 database into memory - making it faster
+##### change the hex to uppercase, otherwise we override our own encoding
+$i=0;
+open (UTFDB,"utf8.db") || die "Couldn open db\n";
+while (<UTFDB>){
+ @utf8[$i]=uc($_);
+ $i++;
+}
+
+#####init all
+##### parameters passed to us is <targethost>:<targetport>:<IDSevasive_mode>
+($host,$port,$mode)=split(/:/,@ARGV[0]);
+my $target = inet_aton($host);
+open (IN,"-") || die "Couldnt open stdout";
+$request="";
+
+####open socket to the target so long - we'll need it later
+socket(S,PF_INET,SOCK_STREAM,getprotobyname('tcp')||0);
+connect(S,pack "SnA4x8",2,$port,$target);
+$post=0;
+
+
+while (<IN>) {
+#comment all lines that contains DEBUG to switch debug off
+open (DEBUG,">>/tmp/debug") || die "Coulnt open debuging file\n";
+
+ if ($post<100) { #$post is multifunction flag
+  ### change all Keep-Alives to closed
+  if (($_ =~ /Keep-Alive/)){ $request=$request."Connection: close\n";}
+   else {
+     if ($_ =~ /POST/) {$post=1;} # remember its a POST
+     # get the content length
+     if ($_ =~ /Content-Length/) { ($dummy,$contentlength)=split(/:/,$_); chomp $contentlength;}
+     ### collect the method and request
+     if (($_ =~ /HEAD/) || ($_ =~ /GET/) || ($_ =~ /POST/)) { 
+      ($HTTPmethod, $getrequest) = split (/ /,$_);
+
+      # Encoding - methods 1-6 is taken from Whisker.pl by RFP (rfp@wiretrip.net)
+      # method 0 clear (no encoding) for testing
+      if($mode==0){ $getrequest=$getrequest; }
+      # method 1 all UPPERCASE
+      if($mode==1){ $getrequest=uc($getrequest);} 
+      # method 2 hex encoding
+      if($mode==2){ $getrequest=~s/([-a-zA-Z0-9.])/sprintf("%%%x",ord($1))/ge;}
+      # method 3 /./ directory insertion
+      if($mode==3){ $getrequest=~s/\//\/.\//g;} 
+      # method 4 fake parameter
+      if($mode==4){ $getrequest='/index.html%3f'.&rstr.'=/..'.$getrequest;}
+      # method 5 premature URL ending
+      if($mode==5){ $getrequest='/%20HTTP/1.0%0D%0A%0D%0AAccept%3A%20'.&rstr.'/../..'.$getrequest;}
+      # method 6 - windows delimeter
+      if($mode==6){ 
+       $getrequest=~s/\//\\/g; 
+       $getrequest=~s/^\\/\//; 
+       $getrequest=~s/\\$/\//;
+      } 
+      # method 7 - UTF8 encoding
+      if ($mode==7){
+       #change a-z - IIS is not case sensitive
+       for ($c=97; $c<122; $c++){
+        $old=chr($c);
+        $new=&tutf($old);
+        $getrequest =~ s/$old/$new/g;
+       }
+      }  
+
+     $request=$request.$HTTPmethod." ".$getrequest." HTTP/1.0\r\n";
+     } else {$request=$request.$_;} # then its not a GET or HEAD or POST
+   }
+   if (length($_) < 3)   { # do it this way..exploits tend to ignore the RFC
+    if (($post==0) || ($contentlength<1)) {goto end_request;} # some POSTs is zerolength
+    $post=100;
+   }
+ }
+ # if we are here we have start parsing the POST
+ else {
+  $contentc=$contentc+length($_);
+  $request=$request.$_;
+  # check if we collected everything 
+  if ($contentc >= $contentlength) {goto end_request;}
+ } 
+}
+
+#### ok we got the request - lets move on
+end_request:
+print DEBUG "request begin:\n$request";
+close (DEBUG);
+
+close (IN);
+my @in;
+
+#### write to the socket we have defined at the beginning
+select(S);      
+$|=1;   
+print $request;
+
+#### read the results in @in
+while(<S>){ 
+ push @in, $_;
+}
+close(S);
+
+#### write it to STDOUT - which is connected to nc
+select(STDOUT); 
+print @in;
+
+######### subroutines
+#random generator - direct from RFP's whisker
+sub rstr { # no, this is not a cryptographically-robust number generator
+ my $str,$c;
+ $drift=(rand() * 10) % 10;
+ for($c=0;$c<10+$drift;$c++){ 
+ $str .= chr(((rand() * 26) % 26) + 97);} # yes, we only use a-z
+ return $str;
+}
+
+
+#select a random UTF8 encoding char from the database
+sub tutf
+{
+ ($letter)=@_;
+ $line=@utf8[ord($letter)-97];
+ ($duh,$entries)=split(/-/,$line);
+ @codes=split(/,/,$entries); 
+ return @codes[int( rand() * $#codes )];
+}
+# Spidermark: sensepostdata pudding
